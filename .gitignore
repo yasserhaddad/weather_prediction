@@ -7,6 +7,7 @@
 # Folders
 /data/equiangular/
 /data/healpix/
+/data/models/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
