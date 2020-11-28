@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 from modules.test import (compute_rmse_healpix, compute_relBIAS, compute_rSD, compute_R2, compute_anomalies, 
                           compute_relMAE, compute_ACC)
 
-def load_data_split(input_dir, train_years, val_years, test_years, chunk_size, standardized=None):
+def load_data_split(input_dir, train_years, val_years, test_years, chunk_size, random_split=False, standardized=None):
 
     z500 = xr.open_mfdataset(f'{input_dir}geopotential_500/*.nc', combine='by_coords', \
                                  chunks={'time': chunk_size}).rename({'z': 'z500'})
@@ -28,8 +28,17 @@ def load_data_split(input_dir, train_years, val_years, test_years, chunk_size, s
 
     ds = xr.merge([z500, t850, rad], compat='override')
 
-    ds_train = ds.sel(time=slice(*train_years))
-    ds_valid = ds.sel(time=slice(*val_years))
+    if random_split:
+        sel_dates_train = ds.time.values[ds.time.dt.year.isin(train_years)]
+        sel_dates_val = ds.time.values[ds.time.dt.year.isin(val_years)]
+
+        ds_train = ds.sel(time=sel_dates_train)
+        ds_valid = ds.sel(time=sel_dates_val)
+
+    else:
+        ds_train = ds.sel(time=slice(*train_years))
+        ds_valid = ds.sel(time=slice(*val_years))
+    
     ds_test = ds.sel(time=slice(*test_years))
 
 

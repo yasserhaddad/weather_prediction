@@ -147,3 +147,11 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+notebooks/deep_ensembles/
+notebooks/swag/
+notebooks/swag_test/
+notebooks/test.ipynb
+
+modules/swag/models/
+modules/pipeline_test_ensemble.py

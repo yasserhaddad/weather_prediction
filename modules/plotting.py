@@ -73,6 +73,40 @@ def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120):
     plt.show()
 
 
+def plot_crps(crps, lead_time, max_lead_time):
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
+    
+    lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
+    ax1.plot(lead_times, crps.z.values, marker='o')
+    ax2.plot(lead_times, crps.t.values, marker='o')
+    ax1.set_xlabel('Lead time (h)')
+    ax1.set_xticks(lead_times)
+    ax2.set_xticks(lead_times)
+    ax2.set_xlabel('Lead time (h)')
+    ax1.set_ylabel('CRPS')
+    ax2.set_ylabel('CRPS')
+    ax1.set_title('Z500')
+    ax2.set_title('T850')
+    plt.show()
+
+
+def plot_interval(interval_z, interval_t, lead_time, max_lead_time):
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
+    
+    lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
+    ax1.plot(lead_times, interval_z, marker='o')
+    ax2.plot(lead_times, interval_t, marker='o')
+    ax1.set_xlabel('Lead time (h)')
+    ax1.set_xticks(lead_times)
+    ax2.set_xticks(lead_times)
+    ax2.set_xlabel('Lead time (h)')
+    ax1.set_ylabel('Fraction of observations in ensemble interval')
+    ax2.set_ylabel('Fraction of observations in ensemble interval')
+    ax1.set_title('Z500')
+    ax2.set_title('T850')
+    plt.show()
+
+
 def plot_signal(f, sample, var, ax, vmin, vmax, proj, cmap, colorbar, cbar_label, cbar_shrink=0.7, 
                 cbar_pad=0.03, extend='neither'):
     """ Plots a weather signal drawing coastlines
@@ -214,7 +248,7 @@ def plot_benchmark(rmses_spherical, model_description, lead_times, input_dir, ou
 
     plt.show()
     
-def plot_benchmark_simple(rmses_spherical, model_description, lead_times, input_dir, output_dir, \
+def plot_benchmark_simple(rmses_spherical, reference_rmses, model_description, lead_times, input_dir, output_dir, \
                           title=True, filename=None, names=[]):
     """
     Plot rmse of different models vs Weyn et al
@@ -237,14 +271,14 @@ def plot_benchmark_simple(rmses_spherical, model_description, lead_times, input_
     
     # RMSE baselines
     
-    rmses_weyn = xr.open_dataset(input_dir + 'rmses_weyn.nc').rename({'z500':'z', 't850':'t'})
+    # rmses_weyn = xr.open_dataset(input_dir + 'rmses_weyn.nc').rename({'z500':'z', 't850':'t'})
     
     f, axs = plt.subplots(1, 2, figsize=(17, 6))
     if title:
         f.suptitle('RMSE between forecast and observation as a function of forecast time', fontsize=24, y=1.07)
 
-    axs[0].plot(lead_times0, rmses_weyn.z.values[:len(lead_times0)], label='Weyn 2020', linestyle='-')
-    axs[1].plot(lead_times0, rmses_weyn.t.values[:len(lead_times0)], label='Weyn 2020', linestyle='-')
+    axs[0].plot(lead_times0, reference_rmses.z.values, label='Weyn 2020', linestyle='-')
+    axs[1].plot(lead_times0, reference_rmses.t.values, label='Weyn 2020', linestyle='-')
 
     if len(names) == 0:
         axs[0].plot(lead_times, rmses_spherical.z.values, label='Ours', color='black', marker='o')
