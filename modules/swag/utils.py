@@ -210,8 +210,8 @@ def bn_update(loader, model, batch_size, constants_expanded, device, verbose=Fal
     model.apply(lambda module: _get_momenta(module, momenta))
     n = 0
     num_batches = len(loader)
-    n_samples = loader.n_samples if loader.n_samples else len(loader)
-    idxs = loader.idxs if loader.idxs else loader.indices
+    n_samples = loader.n_samples
+    idxs = loader.idxs
 
     with torch.no_grad():
         if verbose:
