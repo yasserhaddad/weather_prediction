@@ -4,6 +4,7 @@ import numpy as np
 import time
 import os
 import json
+import psutil
 import healpy as hp
 import random
 import pickle
@@ -26,11 +27,12 @@ import modules.architectures as modelArchitectures
 from modules.utils import init_device
 from modules.architectures import *
 from modules.test import compute_rmse_healpix
-from modules.plotting import plot_rmses, plot_crps, plot_interval
+from modules.plotting import plot_rmses, plot_rmses_realizations, plot_crps, plot_interval
 from modules.full_pipeline import load_data_split, WeatherBenchDatasetXarrayHealpixTemp, \
                                   train_model_2steps, create_iterative_predictions_healpix_temp, \
                                   compute_errors, plot_climatology, WeatherBenchDatasetXarrayHealpixTempMultiple
-from modules.plotting import plot_general_skills, plot_benchmark, plot_skillmaps, plot_benchmark_simple
+from modules.plotting import plot_general_skills, plot_benchmark, plot_skillmaps, plot_benchmark_simple,\
+                             plot_intervalmap   
 from modules.data import hp_to_equiangular
 from modules.mail import send_info_mail
 
@@ -42,7 +44,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, 
-                        metrics_path, figures_path, description):
+                        metrics_path, figures_path, description, rmse_spherical=None, general_skills=True, benchmark_simple=True,
+                        skillmaps=True):
     start_time = len_sqce * lead_time - 6
     end_time = (6-lead_time) if (6-lead_time) > 0 else None
 
@@ -52,20 +55,24 @@ def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_ti
     t = time.time()
     corr_map, rbias_map, rsd_map, rmse_map, obs_rmse, rmse_map_norm = compute_errors(prediction_ds, obs)
     print(time.time() - t)
-
-    rmse_spherical = xr.load_dataset(metrics_path + 'rmse_' + description + '.nc')
+    
+    if rmse_spherical is None:
+        rmse_spherical = xr.load_dataset(metrics_path + 'rmse_' + description + '.nc')
     rbias_spherical = rbias_map.mean('node').compute()
     rsd_spherical = rsd_map.mean('node').compute()
     corr_spherical = corr_map.mean('node').compute()
 
-    plot_benchmark_simple(rmse_spherical, reference_rmses, description, lead_times, 
-               input_dir=metrics_path, output_dir=figures_path, title=False)
+    if benchmark_simple:
+        plot_benchmark_simple(rmse_spherical, reference_rmses, description, lead_times, 
+                input_dir=metrics_path, output_dir=figures_path, title=False)
     
-    plot_general_skills(rmse_map_norm, corr_map, rbias_map, rsd_map, description, lead_times, 
-                    output_dir=figures_path, title=False)
+    if general_skills:
+        plot_general_skills(rmse_map_norm, corr_map, rbias_map, rsd_map, description, lead_times, 
+                        output_dir=figures_path, title=False)
 
-    plot_skillmaps(rmse_map_norm, rsd_map, rbias_map, corr_map, description, lead_times, resolution, 
-                output_dir=figures_path)
+    if skillmaps:
+        plot_skillmaps(rmse_map_norm, rsd_map, rbias_map, corr_map, description, lead_times, resolution, 
+                    output_dir=figures_path)
 
 
 def hovmoller_diagram(prediction_ds, obs, lead_idx, resolution, figures_path, description):
@@ -154,18 +161,23 @@ def check_interval(prediction_ds, observations):
     min_pred = prediction_ds.min(axis=0)
     max_pred = prediction_ds.max(axis=0)
     
-    interval = ((observations >= min_pred) & (observations <= max_pred)).sum(dim=['time', 'node']).compute()
-    nb_elem = prediction_ds.time.size * prediction_ds.node.size
+    interval = ((observations >= min_pred) & (observations <= max_pred))
+    interval_mean = interval.mean(dim=['time', 'node']).compute()
 
-    interval_z = interval.z.values/nb_elem
-    interval_t = interval.t.values/nb_elem 
+    interval_z = interval_mean.z.values
+    interval_t = interval_mean.t.values
     
-    return interval_z, interval_t 
+    return interval_z, interval_t, interval
 
 
-def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, swag=False, last_epoch_only=True, load_if_exists=False, 
-                                    full_plots=True, hovmoller=True, file_prefix=None):
+def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, swag=False, scale_swag=1.0, 
+                                  no_cov_mat=False, max_models_swag=20, multiple_swag_realizations=False, 
+                                  nb_realizations=1, last_epoch_only=True, load_if_exists=False, 
+                                  probabilistic=True, full_plots=True, hovmoller=True, file_prefix=None):
     print('Reading confing file and setting up folders...')
+
+    pid = os.getpid()
+    process = psutil.Process(pid)
     
     # load config
     with open("../configs/" + config_file) as json_data_file:
@@ -210,7 +222,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     model_filename = model_save_path + description + ".h5"
 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"]="4"
+    os.environ["CUDA_VISIBLE_DEVICES"]="2"
     gpu = [0]
     num_workers = 10
     pin_memory = True
@@ -234,7 +246,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     train_std_ = xr.open_mfdataset(f'{input_dir}std_train_features_dynamic.nc')
 
     # generate train dataloader
-    if swag:
+    if swag and not ensembling:
         training_ds = WeatherBenchDatasetXarrayHealpixTempMultiple(ds=ds_train, out_features=out_features, delta_t=delta_t,
                                                        len_sqce_input=len_sqce, len_sqce_output=num_steps_ahead, max_lead_time=max_lead_time,
                                                        years=train_years, nodes=nodes, nb_timesteps=nb_timesteps,
@@ -276,17 +288,20 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             description_epoch += '_epoch_{}'.format(ep)
 
         if swag:
-            description_epoch += '_swag'
-        
+            description_epoch += '_swag_scale{}'.format(str(scale_swag).replace('.', ''))
+
         pred_filename = pred_save_path +  description_epoch
-        if ensembling:
+
+        if ensembling or multiple_swag_realizations:
             pred_median_filename = pred_filename + "_median.nc"
             pred_mean_filename = pred_filename + "_mean.nc"
             
         rmse_filename = datadir + 'metrics/rmse_' + description_epoch + '.nc'
-        if ensembling:
+        if ensembling or multiple_swag_realizations:
             rmse_median_filename = rmse_filename[:-3] + '_median.nc'
             rmse_mean_filename = rmse_filename[:-3] + '_mean.nc'
+        
+        crps_filename = datadir + 'metrics/crps_' + description_epoch + '.nc'
 
         figures_path = '../data/healpix/figures/' + description_epoch + '/'
         
@@ -308,86 +323,132 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 description_model_epoch += '_epoch{}'.format(ep)
             if swag:
                 description_model_epoch += '_swag'
-            
+
             model_name = model_save_path + description_model_epoch + '.h5'
             pred_model_filename = pred_save_path +  description_model_epoch + ".nc"
-
-            if not os.path.isfile(model_name):
-                print(model_name)
-                continue
-
-            if load_if_exists and os.path.isfile(pred_model_filename):
-                print("\tLoading existing predictions")
-                prediction_ds = xr.open_dataset(pred_model_filename).chunk('auto')
-                models_predictions.append(prediction_ds)
-                continue
-
-            # load model
-            modelClass = getattr(modelArchitectures, model)
-    
             if swag:
-                model_epoch = SWAG(modelClass, N=nodes, in_channels=in_features * len_sqce,
-                                out_channels=out_features, kernel_size=3)
-            else:
-                model_epoch = modelClass(N=nodes, in_channels=in_features * len_sqce,
-                                out_channels=out_features, kernel_size=3)
-
-            state_to_load = torch.load(model_name)
+                pred_model_filename = pred_model_filename[:-3] + \
+                                        '_scale{}.nc'.format(str(scale_swag).replace('.', ''))
             
-            own_state = model_epoch.state_dict()
-            for name, param in state_to_load.items():
-                if name not in own_state:
-                    if '.'.join(name.split('.')[1:]) not in own_state:
-                    #own_state[name] = param
-                        print(name)
-                    else:
-                        n = name
-                        name = '.'.join(n.split('.')[1:])
-                        
-                    #continue
-                if isinstance(param, Parameter):
-                    # backwards compatibility for serialized parameters
-                    param = param.data
-                own_state[name].copy_(param)
-                
-            model_epoch, device = init_device(model_epoch, gpu=gpu)
-            
-            if swag:
-                model_epoch.sample(0.0)
-                utils.bn_update(training_ds, model_epoch, batch_size, constants_expanded, device)
-            
-            # compute predictions
-            predictions, lead_times, times, nodes, out_lat, out_lon = \
-            create_iterative_predictions_healpix_temp(model_epoch, device, testing_ds, constants_tensor.transpose(1,0))
-            
-            # save predictions
-            das = []
-            lev_idx = 0
-            for var in ['z', 't']:       
-                das.append(xr.DataArray(
-                    predictions[:, :, :, lev_idx],
-                    dims=['lead_time', 'time', 'node'],
-                    coords={'lead_time': lead_times, 'time': times[:predictions.shape[1]], 'node': np.arange(nodes)},
-                    name=var
-                ))
-                lev_idx += 1
-
-            prediction_ds = xr.merge(das)
-            prediction_ds = prediction_ds.assign_coords({'lat': out_lat, 'lon': out_lon})
-            prediction_ds = prediction_ds.chunk('auto')
-
-            print("\nSaving to: ", pred_model_filename)
-
-            # save individual model predictions
-            prediction_ds.to_netcdf(pred_model_filename)
-
-            models_predictions.append(prediction_ds)
-
             if ensembling:
-                del prediction_ds
+                    model_path = '../data/healpix/models/'
+                    years_file = description_model_epoch.replace("_epoch{}".format(ep), "") + ".json"
+                    if swag:
+                        years_file = years_file[:-10] + ".json"
+                    with open(model_path + years_file) as json_data_file:
+                        years = json.load(json_data_file)
+                    
+                    train_years = years['train_years']
+                    val_years = years['val_years']
+                    ds_train, _, _ = load_data_split(input_dir, train_years, val_years, test_years, chunk_size, random_split=ensembling)
+                    training_ds = WeatherBenchDatasetXarrayHealpixTempMultiple(ds=ds_train, out_features=out_features, delta_t=delta_t,
+                                                            len_sqce_input=len_sqce, len_sqce_output=num_steps_ahead, max_lead_time=max_lead_time,
+                                                            years=train_years, nodes=nodes, nb_timesteps=nb_timesteps,
+                                                            mean=train_mean_, std=train_std_)  
+
+            for j in range(nb_realizations):
+                torch.manual_seed(i+j)
+
+                if multiple_swag_realizations and nb_realizations > 1:
+                    print("\nRealization", j+1)
+                
+                if ensembling or multiple_swag_realizations:
+                    print("Current memory use :", process.memory_percent())
+                    if process.memory_percent() > 25:
+                        return
+                
+                
+                if multiple_swag_realizations:
+                    pred_model_filename = pred_model_filename[:-3] + '_realization{}.nc'.format(j+1)
+                
+                if not os.path.isfile(model_name):
+                    print(model_name)
+                    continue
+
+                if load_if_exists and os.path.isfile(pred_model_filename):
+                    print("\tLoading existing predictions")
+                    prediction_ds = xr.open_dataset(pred_model_filename).chunk('auto')
+                    models_predictions.append(prediction_ds)
+                    continue           
+
+                # load model
+                modelClass = getattr(modelArchitectures, model)
+        
+                if swag:
+                    model_epoch = SWAG(modelClass, no_cov_mat=no_cov_mat, max_num_models=max_models_swag, N=nodes, 
+                                    in_channels=in_features * len_sqce, out_channels=out_features, kernel_size=3)
+                else:
+                    model_epoch = modelClass(N=nodes, in_channels=in_features * len_sqce,
+                                    out_channels=out_features, kernel_size=3)
+
+                state_to_load = torch.load(model_name)
+                
+                if swag:
+                    model_epoch.load_state_dict(state_to_load, strict=False)
+                else:
+                    own_state = model_epoch.state_dict()
+                    for name, param in state_to_load.items():
+                        if name not in own_state:
+                            if '.'.join(name.split('.')[1:]) not in own_state:
+                            #own_state[name] = param
+                                print(name)
+                            else:
+                                n = name
+                                name = '.'.join(n.split('.')[1:])
+                                
+                            #continue
+                        if isinstance(param, Parameter):
+                            # backwards compatibility for serialized parameters
+                            param = param.data
+                        own_state[name].copy_(param)
+                    
+                model_epoch, device = init_device(model_epoch, gpu=gpu)
+                
+                if swag:
+                    with torch.no_grad():
+                        model_epoch.sample(scale_swag, cov=(not no_cov_mat))
+                    utils.bn_update(training_ds, model_epoch, batch_size, constants_expanded, device)
+                
+                # compute predictions
+                predictions, lead_times, times, nodes, out_lat, out_lon = \
+                create_iterative_predictions_healpix_temp(model_epoch, device, testing_ds, constants_tensor.transpose(1,0))
+                
+                # save predictions
+                das = []
+                lev_idx = 0
+                for var in ['z', 't']:       
+                    das.append(xr.DataArray(
+                        predictions[:, :, :, lev_idx],
+                        dims=['lead_time', 'time', 'node'],
+                        coords={'lead_time': lead_times, 'time': times[:predictions.shape[1]], 'node': np.arange(nodes)},
+                        name=var
+                    ))
+                    lev_idx += 1
+
+                prediction_ds = xr.merge(das)
+                prediction_ds = prediction_ds.assign_coords({'lat': out_lat, 'lon': out_lon})
+                prediction_ds = prediction_ds.chunk('auto')
+
+                print("\nSaving to: ", pred_model_filename)
+
+                # save individual model predictions
+                try:
+                    prediction_ds.to_netcdf(pred_model_filename)
+                except PermissionError:
+                    print("Can't save predictions, permission denied")
+                
+                models_predictions.append(prediction_ds)
+
+                if ensembling or multiple_swag_realizations:
+                    del prediction_ds
+            
+        if ensembling or multiple_swag_realizations:
+            print("Current memory use :", process.memory_percent())
+            if process.memory_percent() > 25:
+                return
 
         # concatenate all predictions from different models
-        if ensembling:
+        if ensembling or multiple_swag_realizations:
             prediction_ds = xr.concat(models_predictions, dim="member")
 
         if load_if_exists:
@@ -405,29 +466,40 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         obs = obs.sel(dict(time=common_time, lead_time=common_lead_time))
         obs = obs.chunk(models_predictions[-1].chunks)
         
-        if ensembling:
-            # compute crps
-            prediction_ds = prediction_ds.drop('lon').drop('lat')
-            dims = list(prediction_ds.dims).copy()
-            dims.remove('member')
-            dims.remove('lead_time')
-            crps_epoch = crps_ensemble(obs, prediction_ds.chunk({'member': -1}), dim=dims).compute()
-            #skill_score = crpss(obs, prediction_ds, dims=list(prediction_ds.dims))
-            crps_results.append(list(zip(crps_epoch.z.values, crps_epoch.t.values)))
-            print('\nCRPS:')
-            print('\tZ500 : {:.3f}'.format(crps_results[-1][0][0]))
-            print('\tT850 : {:.3f}'.format(crps_results[-1][0][1]))
+        if ensembling or multiple_swag_realizations:
+            if probabilistic:
+                # compute crps
+                prediction_ds = prediction_ds.drop('lon').drop('lat')
+                dims = list(prediction_ds.dims).copy()
+                dims.remove('member')
+                dims.remove('lead_time')
+                crps_epoch = crps_ensemble(obs, prediction_ds.chunk({'member': -1}), dim=dims).compute()
+                crps_epoch.to_netcdf(crps_filename)
+                #skill_score = crpss(obs, prediction_ds, dims=list(prediction_ds.dims))
+                crps_results.append(list(zip(crps_epoch.z.values, crps_epoch.t.values)))
+                print('\nCRPS:')
+                print('\tZ500 : {:.3f}'.format(crps_results[-1][0][0]))
+                print('\tT850 : {:.3f}'.format(crps_results[-1][0][1]))
 
-            plot_crps(crps_epoch, lead_time=6, max_lead_time=max_lead_time)
+                plot_crps(crps_epoch, lead_time=6, max_lead_time=max_lead_time)
 
-            # Compute percentage of observations in ensemble interval
-            interval_z, interval_t = check_interval(prediction_ds, obs)
-            print('Percentage of observations in the ensemble interval')
-            print('\tZ500 : {:.3%}'.format(interval_z[0]))
-            print('\tT850 : {:.3%}'.format(interval_t[0]))
+                # Compute percentage of observations in ensemble interval
+                interval_z, interval_t, interval = check_interval(prediction_ds, obs)
+                print('Percentage of observations in the ensemble interval')
+                print('\tZ500 : {:.3%}'.format(interval_z[0]))
+                print('\tT850 : {:.3%}'.format(interval_t[0]))
 
-            plot_interval(interval_z, interval_t, lead_time=6, max_lead_time=max_lead_time)
+                plot_interval(interval_z, interval_t, lead_time=6, max_lead_time=max_lead_time)
 
+                interval = interval.drop('lat').drop('lon')
+                interval = interval.astype('uint8').mean(['time']).compute()
+                
+                lead_time = 6
+                lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
+                plot_intervalmap(interval, description_epoch + '_median', lead_times, resolution, figures_path)
+
+
+            t_median_start = time.time()
             # median over values of ensemble
             predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
             prediction_median_ds = xr.merge(predictions_median)
@@ -435,8 +507,10 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             
             # save final median predictions
             prediction_median_ds.to_netcdf(pred_median_filename)
+            t_median_end = time.time()
+            print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
 
-
+            t_mean_start = time.time()
             # mean over values of ensemble
             predictions_mean = [prediction_ds['z'].mean(axis=0), prediction_ds['t'].mean(axis=0)]
             prediction_mean_ds = xr.merge(predictions_mean)
@@ -444,32 +518,61 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             
             # save final mean predictions
             prediction_median_ds.to_netcdf(pred_mean_filename)
-
+            t_mean_end = time.time()
+            print("Mean predictions : {t:2f}".format(t=t_mean_end-t_mean_start))
 
             # compute RMSE
             reference_rmses = rmses_weyn.rename({'z500':'z', 't850':'t'}).sel(lead_time=common_lead_time)
-
+            
+            t_median_start = time.time()
             ## RMSE for median of predictions
             rmse_median = compute_rmse_healpix(prediction_median_ds, obs).load()
             rmse_median.to_netcdf(rmse_median_filename)
+            t_median_end = time.time()
+            print("RMSE median : {t:2f}".format(t=t_median_end-t_median_start))
+
+            t_mean_start = time.time()
+            ## RMSE for mean of predictions
+            rmse_mean = compute_rmse_healpix(prediction_mean_ds, obs).load()
+            rmse_mean.to_netcdf(rmse_mean_filename)
+            t_mean_end = time.time()
+            print("RMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
+
+            ## Computing the RMSE of individual realization of SWAG
+            if multiple_swag_realizations:
+                t_realizations_start = time.time()
+                rmses_realizations = []
+                for realization in models_predictions:
+                    rmse_realization = compute_rmse_healpix(realization, obs)
+                    rmses_realizations.append(rmse_realization)
+                t_realizations_end = time.time()
+                print("RMSE realizations : {t:2f}".format(t=t_realizations_end-t_realizations_start))
             
             # plot RMSE
             print('RMSE median')
             print('\tZ500 - 0:', rmse_median.z.values[0])
             print('\tT850 - 0:', rmse_median.t.values[0])
 
-            plot_rmses(rmse_median, reference_rmses, lead_time=6, max_lead_time=max_lead_time)
-
-            ## RMSE for median of predictions
-            rmse_mean = compute_rmse_healpix(prediction_mean_ds, obs).load()
-            rmse_mean.to_netcdf(rmse_mean_filename)
-            
             # plot RMSE
             print('RMSE mean')
             print('\tZ500 - 0:', rmse_mean.z.values[0])
             print('\tT850 - 0:', rmse_mean.t.values[0])
 
-            plot_rmses(rmse_mean, reference_rmses, lead_time=6, max_lead_time=max_lead_time)
+            if multiple_swag_realizations and not ensembling:
+                # Plot the realizations and their median
+                plot_rmses_realizations(rmse_median, rmses_realizations, lead_time=6, max_lead_time=max_lead_time, 
+                                        title=f'Realizations and median comparison for scale {str(scale_swag)}', rmse_mean=rmse_mean)
+                
+                lead_time = 6
+                generate_plots_eval(prediction_median_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
+                                    figures_path, description_epoch + "_median", rmse_spherical=rmse_median, general_skills=True, 
+                                    benchmark_simple=False, skillmaps=False)
+            else:
+                plot_rmses(rmse_median, reference_rmses, lead_time=6, max_lead_time=max_lead_time, 
+                            title=f'RMSE of Median of Ensemble for {nb_models} models')   
+
+                # plot_rmses(rmse_mean, reference_rmses, lead_time=6, max_lead_time=max_lead_time,
+                #             title=f'RMSE of Mean of Ensemble for {nb_models} models')
         else:
             # compute RMSE
             reference_rmses = rmses_weyn.rename({'z500':'z', 't850':'t'}).sel(lead_time=common_lead_time)
@@ -479,8 +582,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             
             # plot RMSE
             print('RMSE')
-            print('\tZ500 - 0:', rmse_mean.z.values[0])
-            print('\tT850 - 0:', rmse_mean.t.values[0])
+            print('\tZ500 - 0:', rmse.z.values[0])
+            print('\tT850 - 0:', rmse.t.values[0])
 
             plot_rmses(rmse, reference_rmses, lead_time=6, max_lead_time=max_lead_time)
 
@@ -497,7 +600,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     
     if full_plots:
         lead_time = 6
-        if ensembling:
+        if ensembling or multiple_swag_realizations:
             print("Median")
             generate_plots_eval(prediction_median_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
                                 figures_path, description_epoch + '_median')
@@ -510,7 +613,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     
     if hovmoller:
         lead_idx = len(lead_times) - 1
-        if ensembling:
+        if ensembling or multiple_swag_realizations:
             print("Median")
             hovmoller_diagram(prediction_median_ds, obs, lead_idx, resolution, figures_path, description_epoch + '_median')
 
@@ -519,5 +622,10 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         else:
             hovmoller_diagram(prediction_ds, obs, lead_idx, resolution, figures_path, description_epoch)
     
-    return crps_results, rmse_median, rmse_mean, prediction_ds, prediction_mean_ds, prediction_median_ds, obs, plot_params
+    if ensembling or multiple_swag_realizations:
+        return crps_results, rmse_median, rmse_mean, prediction_ds, prediction_mean_ds, prediction_median_ds, obs, \
+                plot_params
+    else:
+        return rmse, prediction_ds, obs, plot_params
+
 

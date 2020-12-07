@@ -52,9 +52,9 @@ def _compute_min_max(samples):
     maxs = [samples[i].max(dim=xr.ALL_DIMS).values for i in range(len(samples))]
     return min(mins), max(maxs)
 
-def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120):
-    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
-    
+def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120, title=None):
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4), constrained_layout=True)
+        
     lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
     ax1.plot(lead_times, rmse.z.values, label='Spherical Weyn')
     ax1.plot(lead_times, reference_rmse.z.values, label='Actual Weyn')
@@ -70,6 +70,49 @@ def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120):
     ax2.set_title('T850')
     ax1.legend()
     ax2.legend()
+
+    if title:
+        f.suptitle(title, fontsize=20, horizontalalignment='center')
+
+    plt.show()
+
+
+def plot_rmses_realizations(rmse_median, rmse_realizations, lead_time, max_lead_time=120, title=None, rmse_mean=None):
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4), constrained_layout=True)
+
+    lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
+
+    ax1.plot(lead_times, rmse_median.z.values, color='blue', label='Ensemble Median')
+    if rmse_mean:
+        ax1.plot(lead_times, rmse_mean.z.values, color='green', label='Ensemble Mean')
+
+    for i, rmse in enumerate(rmse_realizations):
+        ax1.plot(lead_times, rmse.z.values, color='red', alpha=0.1)
+    
+    ax2.plot(lead_times, rmse_median.t.values, color='blue', label='Ensemble Median')
+    if rmse_mean:
+        ax2.plot(lead_times, rmse_mean.t.values, color='green', label='Ensemble Mean')
+
+    for i, rmse in enumerate(rmse_realizations):
+        ax2.plot(lead_times, rmse.t.values, color='red', alpha=0.1)
+
+    ax1.set_xlabel('Lead time (h)')
+    ax1.set_xticks(lead_times)
+    ax2.set_xticks(lead_times)
+    ax2.set_xlabel('Lead time (h)')
+    
+    ax1.set_ylabel('RMSE')
+    ax2.set_ylabel('RMSE')
+
+    ax1.set_title('Z500')
+    ax2.set_title('T850')
+
+    ax1.legend()
+    ax2.legend()
+
+    if title:
+        plt.suptitle(title, fontsize=20, horizontalalignment='center')
+
     plt.show()
 
 
@@ -555,7 +598,34 @@ def plot_general_skills(rmse_map, corr_map, rbias_map, rsd_map, model_descriptio
     plt.savefig(output_dir + filename, bbox_inches='tight')
     
     plt.show()
-    
+
+def plot_intervalmap(intervals, model_description, lead_times, resolution, output_dir):
+    for i, lead in enumerate(lead_times):
+        interval_min = 0
+        interval_max = 1
+
+        interval_equi = hp_to_equiangular(intervals.isel(lead_time=i), resolution)
+        proj = ccrs.PlateCarree()
+        f, axs = plt.subplots(1, 2, figsize=(15,15), subplot_kw=dict(projection=proj))
+
+        cols = ['Z500', 'T850']
+        for ax, col in zip(axs, cols):
+            ax.set_title(col, fontsize=24, y=1.08)
+
+        f.suptitle('Skillmaps between forecast and observation, lead time: {}h'.format(lead), 
+                   fontsize=26, y=0.7, x=0.45)
+
+        plot_signal(f, sample=interval_equi, var='z', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[0], 
+                    cmap='Reds', colorbar=False, cbar_label='', extend='max')
+        plot_signal(f, sample=interval_equi, var='t', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[1], 
+                    cmap='Reds', colorbar=True, cbar_label='In Interval', extend='max', cbar_shrink=0.3)
+
+        f.tight_layout(pad=-2)
+        filename = model_description + '_' + str(i) + '_interval_maps.png'
+        plt.savefig(output_dir + filename, bbox_inches='tight')
+
+        plt.show()
+
 
 def plot_skillmaps(rmse_map, rsd_map, rbias_map, corr_map, model_description, lead_times, resolution, 
                    output_dir):

@@ -40,7 +40,7 @@ faulthandler.enable()
 # Adapted : added model_nb argument to capture the model number of the ensemble, and the train split
 # as the training set will be split randomly
 def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensembling=True, train_split=0.8,
-                  swag=False, swa_start=3, no_cov_mat=False, max_num_models_swag=20, save_only_last=True, 
+                  swag=False, swa_start=3, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, save_only_last=True, 
                   load_model=False, model_name_epochs=None, file_prefix=None):
     def update_w(w):
         """
@@ -58,7 +58,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
 
     def train_model_multiple_steps(model, weights_loss, criterion, optimizer, device, training_ds,
                                    len_output, constants, batch_size, epochs, validation_ds, model_filename, 
-                                   swag, swag_model=None, no_cov_mat=False):
+                                   swag, swag_model=None, no_cov_mat=False, swag_freq=10):
         
         
         # Initialize parameters and storage of results
@@ -118,6 +118,12 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
             times_it = []
             t0 = time.time()
             
+            if swag:
+                batches = list(range(0, n_samples - batch_size, batch_size))
+                num_batches = len(batches)
+                freq = int(num_batches/(swag_freq-1))
+                collection_indices = [batches[i] for i in range(0, num_batches, freq)]
+
             # iterate along batches 
             for i in range(0, n_samples - batch_size, batch_size):
                 #tbatch0 = time.time()
@@ -182,6 +188,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
                         threshold /= 10
                     else:
                         count_upd += 1
+                
 
                 #tbatch4 = time.time()
                 times_it.append(time.time() - t0)
@@ -193,6 +200,9 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
                                   count_upd),
                           end="")
                 batch_idx += 1
+
+                if swag and swag_model and i in collection_indices:
+                    swag_model.collect_model(model)
 
 
             train_loss = train_loss / n_samples
@@ -377,7 +387,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
 
 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="2"
     gpu = [0]
     num_workers = 10
     pin_memory = True
@@ -584,6 +594,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
         'swag': swag,
         'swa_start': swa_start if swag else None,
         'max_num_models_swag': max_num_models_swag if swag else None,
+        'swag_freq': swag_freq,
         'no_cov_mat': no_cov_mat if swag else None,
         'train_years': train_years,
         'val_years': val_years,
@@ -605,7 +616,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
 
 
 def train_ensemble(config_file, nb_models=3, plot_weight_variations=False, ensembling=True, train_split=0.8, 
-                   swag=False, swa_start=8, no_cov_mat=False, max_num_models_swag=20, save_only_last=True, load_model=False, 
+                   swag=False, swa_start=8, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, save_only_last=True, load_model=False, 
                    model_name_epochs=None, file_prefix=None):
     train_losses = []
     val_losses = []
@@ -618,8 +629,9 @@ def train_ensemble(config_file, nb_models=3, plot_weight_variations=False, ensem
         train_loss_ev, val_loss_ev, train_loss_steps_ev, test_loss_steps_ev, weight_variations_ev = \
         main_ensemble(config_file, model_nb=model_nb+1, plot_weight_variations=plot_weight_variations, 
                       ensembling=ensembling, train_split=train_split, swag=swag, swa_start=swa_start,
-                      no_cov_mat=no_cov_mat, max_num_models_swag=max_num_models_swag,save_only_last=save_only_last, 
-                      load_model=load_model, model_name_epochs=model_name_epochs, file_prefix=file_prefix)
+                      no_cov_mat=no_cov_mat, swag_freq=swag_freq, max_num_models_swag=max_num_models_swag, 
+                      save_only_last=save_only_last, load_model=load_model, model_name_epochs=model_name_epochs, 
+                      file_prefix=file_prefix)
         train_losses.append(train_loss_ev)
         val_losses.append(val_loss_ev)
         train_losses_steps.append(train_loss_steps_ev)
@@ -656,11 +668,14 @@ if __name__=="__main__":
                         help='Deactivate saving sample covariance matrix (no SWAG)')
     parser.add_argument('--max_num_models_swag', type=int, default=20,
                         help='Max number of models to save for SWAG')
+    parser.add_argument('--swag_freq', type=int, default=10,
+                        help='SWAG collection frequency/epoch')
 
     args = parser.parse_args()
     
     train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations = \
             train_ensemble(args.config_file, args.nb_models, args.plot_weight_variations, args.ensembling,
-                           args.train_split, args.swag, args.swa_start, args.no_cov_mat, args.max_num_models_swag, 
-                           args.save_only_last, args.load_model, args.model_name_epochs, args.file_prefix)
+                           args.train_split, args.swag, args.swa_start, args.no_cov_mat, args.swag_freq,
+                           args.max_num_models_swag, args.save_only_last, args.load_model, args.model_name_epochs, 
+                           args.file_prefix)
     
