@@ -357,13 +357,16 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
 
     # Adapted : Randomly split training data
     ## Pick random training years
-    if ensembling:
+    if ensembling and train_split is not None:
+        print("Picking random years")
         start_train_year = train_years[0]
         end_train_year = val_years[1]
         year_range = [i for i in range(int(start_train_year), int(end_train_year)+1)]
        
         train_years = sorted(random.sample(year_range, int(train_split*len(year_range))))
         val_years = list(set(year_range) - set(train_years))
+    else:
+        print("Fixed dataset, as in config")
 
 
     # training parameters
@@ -387,7 +390,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
 
 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"]="2"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
     gpu = [0]
     num_workers = 10
     pin_memory = True
@@ -395,7 +398,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
     # Adapted : use random split instead of a range for the load_data_split
     # get training, validation and test data
     ds_train, ds_valid, ds_test = load_data_split(input_dir, train_years, val_years, test_years, 
-                                                    chunk_size, random_split=ensembling)
+                                                    chunk_size, random_split=( ensembling and train_split is not None))
 
     constants = xr.open_dataset(f'{input_dir}constants/constants_5.625deg_standardized.nc')
 
@@ -672,10 +675,15 @@ if __name__=="__main__":
                         help='SWAG collection frequency/epoch')
 
     args = parser.parse_args()
+
+    if args.train_split < 0 or args.train_split > 1:
+        train_split = None
+    else:
+        train_split = args.train_split
     
     train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations = \
             train_ensemble(args.config_file, args.nb_models, args.plot_weight_variations, args.ensembling,
-                           args.train_split, args.swag, args.swa_start, args.no_cov_mat, args.swag_freq,
+                           train_split, args.swag, args.swa_start, args.no_cov_mat, args.swag_freq,
                            args.max_num_models_swag, args.save_only_last, args.load_model, args.model_name_epochs, 
                            args.file_prefix)
     

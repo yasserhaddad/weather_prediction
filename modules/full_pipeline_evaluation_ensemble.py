@@ -172,8 +172,9 @@ def check_interval(prediction_ds, observations):
 
 def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, swag=False, scale_swag=1.0, 
                                   no_cov_mat=False, max_models_swag=20, multiple_swag_realizations=False, 
-                                  nb_realizations=1, last_epoch_only=True, load_if_exists=False, 
-                                  probabilistic=True, full_plots=True, hovmoller=True, file_prefix=None):
+                                  nb_realizations=1, aggregate_realizations=False, plot_realizations=False, 
+                                  last_epoch_only=True, load_if_exists=False, load_metrics=False, probabilistic=True, 
+                                  full_plots=True, hovmoller=True, file_prefix=None):
     print('Reading confing file and setting up folders...')
 
     pid = os.getpid()
@@ -295,15 +296,35 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         if ensembling or multiple_swag_realizations:
             pred_median_filename = pred_filename + "_median.nc"
             pred_mean_filename = pred_filename + "_mean.nc"
+
+            if aggregate_realizations:
+                pred_median_filename = pred_filename + "_aggregate_median.nc"
+                pred_mean_filename = pred_filename + "_aggregate_mean.nc"
             
         rmse_filename = datadir + 'metrics/rmse_' + description_epoch + '.nc'
         if ensembling or multiple_swag_realizations:
             rmse_median_filename = rmse_filename[:-3] + '_median.nc'
             rmse_mean_filename = rmse_filename[:-3] + '_mean.nc'
+
+            if aggregate_realizations:
+                rmse_median_filename = rmse_filename[:-3] + '_aggregate_median.nc'
+                rmse_mean_filename = rmse_filename[:-3] + '_aggregate_mean.nc'
         
-        crps_filename = datadir + 'metrics/crps_' + description_epoch + '.nc'
+        if multiple_swag_realizations:
+            rmse_realizations_filename = []
+        
+        if probabilistic:
+            crps_filename = datadir + 'metrics/crps_' + description_epoch + '.nc'
+            interval_filename = datadir + 'metrics/interval_' + description_epoch + '.nc'
+
+            if aggregate_realizations:
+                crps_filename = datadir + 'metrics/crps_' + description_epoch + '_aggregate.nc'
+                interval_filename = datadir + 'metrics/interval_' + description_epoch + '_aggregate.nc'
 
         figures_path = '../data/healpix/figures/' + description_epoch + '/'
+
+        if aggregate_realizations:
+            figures_path = '../data/healpix/figures/' + description_epoch + '_aggregate/'
         
         if not os.path.isdir(figures_path):
             os.mkdir(figures_path)
@@ -346,6 +367,9 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                                                             years=train_years, nodes=nodes, nb_timesteps=nb_timesteps,
                                                             mean=train_mean_, std=train_std_)  
 
+            if aggregate_realizations:
+                realizations_predictions = []
+
             for j in range(nb_realizations):
                 torch.manual_seed(i+j)
 
@@ -360,6 +384,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 
                 if multiple_swag_realizations:
                     pred_model_filename = pred_model_filename[:-3] + '_realization{}.nc'.format(j+1)
+                    rmse_realization_filename = datadir + 'metrics/rmse_' + description_model_epoch + '_realization{}.nc'.format(j+1)
+                    rmse_realizations_filename.append(rmse_realization_filename)
                 
                 if not os.path.isfile(model_name):
                     print(model_name)
@@ -368,7 +394,10 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 if load_if_exists and os.path.isfile(pred_model_filename):
                     print("\tLoading existing predictions")
                     prediction_ds = xr.open_dataset(pred_model_filename).chunk('auto')
-                    models_predictions.append(prediction_ds)
+                    if aggregate_realizations:
+                        realizations_predictions.append(prediction_ds)
+                    else:
+                        models_predictions.append(prediction_ds)
                     continue           
 
                 # load model
@@ -437,23 +466,44 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 except PermissionError:
                     print("Can't save predictions, permission denied")
                 
-                models_predictions.append(prediction_ds)
+                if aggregate_realizations:
+                    realizations_predictions.append(prediction_ds)
+                else:
+                    models_predictions.append(prediction_ds)
 
                 if ensembling or multiple_swag_realizations:
                     del prediction_ds
+            
+            # Take median of realizations per model
+            if aggregate_realizations:
+                out_lat = realizations_predictions[0]['lat']
+                out_lon = realizations_predictions[0]['lon']
+                realizations_predictions = [pred.drop('lat').drop('lon') for pred in realizations_predictions]
+                prediction_ds = xr.concat(realizations_predictions, dim="member")
+                predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
+                prediction_ds = xr.merge(predictions_median)
+                prediction_ds = prediction_ds.assign_coords({'lat': out_lat, 'lon': out_lon}).chunk(realizations_predictions[0].chunks)
+                models_predictions.append(prediction_ds)
+
+                pred_model_filename_agg = pred_model_filename[:-3] + "_aggregate.nc"
+                prediction_ds.to_netcdf(pred_model_filename_agg)
+
+                del prediction_ds
+                del realizations_predictions
             
         if ensembling or multiple_swag_realizations:
             print("Current memory use :", process.memory_percent())
             if process.memory_percent() > 25:
                 return
+        
+        if load_if_exists:
+            out_lat = models_predictions[0]['lat']
+            out_lon = models_predictions[0]['lon']
 
         # concatenate all predictions from different models
         if ensembling or multiple_swag_realizations:
+            models_predictions = [pred.drop('lat').drop('lon') for pred in models_predictions]
             prediction_ds = xr.concat(models_predictions, dim="member")
-
-        if load_if_exists:
-            out_lat = prediction_ds['lat']
-            out_lon = prediction_ds['lon']
         
         # load observations
         obs = xr.open_mfdataset(pred_save_path + 'observations_nearest.nc', combine='by_coords')
@@ -469,7 +519,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         if ensembling or multiple_swag_realizations:
             if probabilistic:
                 # compute crps
-                prediction_ds = prediction_ds.drop('lon').drop('lat')
+                prediction_ds = prediction_ds
                 dims = list(prediction_ds.dims).copy()
                 dims.remove('member')
                 dims.remove('lead_time')
@@ -490,7 +540,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 print('\tT850 : {:.3%}'.format(interval_t[0]))
 
                 plot_interval(interval_z, interval_t, lead_time=6, max_lead_time=max_lead_time)
-
+                
                 interval = interval.drop('lat').drop('lon')
                 interval = interval.astype('uint8').mean(['time']).compute()
                 
@@ -498,58 +548,61 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
                 plot_intervalmap(interval, description_epoch + '_median', lead_times, resolution, figures_path)
 
+            models_predictions = [pred.assign_coords({'lat': out_lat, 'lon': out_lon}) for pred in models_predictions]
 
-            t_median_start = time.time()
-            # median over values of ensemble
-            predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
-            prediction_median_ds = xr.merge(predictions_median)
-            prediction_median_ds = prediction_median_ds.assign_coords({'lat': out_lat, 'lon': out_lon})
-            
-            # save final median predictions
-            prediction_median_ds.to_netcdf(pred_median_filename)
-            t_median_end = time.time()
-            print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
+            if load_metrics and os.path.isfile(pred_median_filename):
+                prediction_median_ds = xr.open_dataset(pred_median_filename).chunk(models_predictions[0].chunks)
+            else:
+                t_median_start = time.time()
+                # median over values of ensemble
+                predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
+                prediction_median_ds = xr.merge(predictions_median)
+                prediction_median_ds = prediction_median_ds.assign_coords({'lat': out_lat, 'lon': out_lon}).chunk(models_predictions[0].chunks)
+                
+                # save final median predictions
+                prediction_median_ds.to_netcdf(pred_median_filename)
+                t_median_end = time.time()
+                print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
 
-            t_mean_start = time.time()
-            # mean over values of ensemble
-            predictions_mean = [prediction_ds['z'].mean(axis=0), prediction_ds['t'].mean(axis=0)]
-            prediction_mean_ds = xr.merge(predictions_mean)
-            prediction_mean_ds = prediction_mean_ds.assign_coords({'lat': out_lat, 'lon': out_lon})
-            
-            # save final mean predictions
-            prediction_median_ds.to_netcdf(pred_mean_filename)
-            t_mean_end = time.time()
-            print("Mean predictions : {t:2f}".format(t=t_mean_end-t_mean_start))
+            if load_metrics and os.path.isfile(pred_mean_filename):
+                prediction_mean_ds = xr.open_dataset(pred_mean_filename).chunk(models_predictions[0].chunks)
+            else:
+                t_mean_start = time.time()
+                # mean over values of ensemble
+                predictions_mean = [prediction_ds['z'].mean(axis=0), prediction_ds['t'].mean(axis=0)]
+                prediction_mean_ds = xr.merge(predictions_mean)
+                prediction_mean_ds = prediction_mean_ds.assign_coords({'lat': out_lat, 'lon': out_lon}).chunk(models_predictions[0].chunks)
+                
+                # save final mean predictions
+                prediction_median_ds.to_netcdf(pred_mean_filename)
+                t_mean_end = time.time()
+                print("Mean predictions : {t:2f}".format(t=t_mean_end-t_mean_start))
 
             # compute RMSE
             reference_rmses = rmses_weyn.rename({'z500':'z', 't850':'t'}).sel(lead_time=common_lead_time)
             
-            t_median_start = time.time()
-            ## RMSE for median of predictions
-            rmse_median = compute_rmse_healpix(prediction_median_ds, obs).load()
-            rmse_median.to_netcdf(rmse_median_filename)
-            t_median_end = time.time()
-            print("RMSE median : {t:2f}".format(t=t_median_end-t_median_start))
-
-            t_mean_start = time.time()
-            ## RMSE for mean of predictions
-            rmse_mean = compute_rmse_healpix(prediction_mean_ds, obs).load()
-            rmse_mean.to_netcdf(rmse_mean_filename)
-            t_mean_end = time.time()
-            print("RMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
-
-            ## Computing the RMSE of individual realization of SWAG
-            if multiple_swag_realizations:
-                t_realizations_start = time.time()
-                rmses_realizations = []
-                for realization in models_predictions:
-                    rmse_realization = compute_rmse_healpix(realization, obs)
-                    rmses_realizations.append(rmse_realization)
-                t_realizations_end = time.time()
-                print("RMSE realizations : {t:2f}".format(t=t_realizations_end-t_realizations_start))
+            if load_metrics and os.path.isfile(rmse_median_filename):
+                rmse_median = xr.open_dataset(rmse_median_filename)
+            else:
+                t_median_start = time.time()
+                ## RMSE for median of predictions
+                rmse_median = compute_rmse_healpix(prediction_median_ds, obs).load()
+                rmse_median.to_netcdf(rmse_median_filename)
+                t_median_end = time.time()
+                print("RMSE median : {t:2f}".format(t=t_median_end-t_median_start))
             
+            if load_metrics and os.path.isfile(rmse_mean_filename):
+                rmse_mean = xr.open_dataset(rmse_mean_filename)
+            else:
+                t_mean_start = time.time()
+                ## RMSE for mean of predictions
+                rmse_mean = compute_rmse_healpix(prediction_mean_ds, obs).load()
+                rmse_mean.to_netcdf(rmse_mean_filename)
+                t_mean_end = time.time()
+                print("RMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
+
             # plot RMSE
-            print('RMSE median')
+            print('\nRMSE median')
             print('\tZ500 - 0:', rmse_median.z.values[0])
             print('\tT850 - 0:', rmse_median.t.values[0])
 
@@ -558,7 +611,18 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             print('\tZ500 - 0:', rmse_mean.z.values[0])
             print('\tT850 - 0:', rmse_mean.t.values[0])
 
-            if multiple_swag_realizations and not ensembling:
+            ## Computing the RMSE of individual realizations of SWAG
+            if plot_realizations:
+                t_realizations_start = time.time()
+                rmses_realizations = []
+                for idx, realization in enumerate(models_predictions):
+                    rmse_realization = compute_rmse_healpix(realization, obs)
+                    rmse_realization.to_netcdf(rmse_realizations_filename[idx])
+                    rmses_realizations.append(rmse_realization)
+                t_realizations_end = time.time()
+                print("\nRMSE realizations : {t:2f}".format(t=t_realizations_end-t_realizations_start))
+
+            if plot_realizations:
                 # Plot the realizations and their median
                 plot_rmses_realizations(rmse_median, rmses_realizations, lead_time=6, max_lead_time=max_lead_time, 
                                         title=f'Realizations and median comparison for scale {str(scale_swag)}', rmse_mean=rmse_mean)
@@ -567,7 +631,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 generate_plots_eval(prediction_median_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
                                     figures_path, description_epoch + "_median", rmse_spherical=rmse_median, general_skills=True, 
                                     benchmark_simple=False, skillmaps=False)
-            else:
+            if ensembling:
                 plot_rmses(rmse_median, reference_rmses, lead_time=6, max_lead_time=max_lead_time, 
                             title=f'RMSE of Median of Ensemble for {nb_models} models')   
 
