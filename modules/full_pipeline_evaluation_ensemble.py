@@ -383,7 +383,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 
                 
                 if multiple_swag_realizations:
-                    pred_model_filename = pred_model_filename[:-3] + '_realization{}.nc'.format(j+1)
+                    pred_model_filename = pred_model_filename[:-3].replace(f'_realization{j}', '') + '_realization{}.nc'.format(j+1)
                     rmse_realization_filename = datadir + 'metrics/rmse_' + description_model_epoch + '_realization{}.nc'.format(j+1)
                     rmse_realizations_filename.append(rmse_realization_filename)
                 
