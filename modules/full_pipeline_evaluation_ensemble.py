@@ -378,7 +378,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 
                 if ensembling or multiple_swag_realizations:
                     print("Current memory use :", process.memory_percent())
-                    if process.memory_percent() > 25:
+                    if process.memory_percent() > 35:
                         return
                 
                 
@@ -493,7 +493,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             
         if ensembling or multiple_swag_realizations:
             print("Current memory use :", process.memory_percent())
-            if process.memory_percent() > 25:
+            if process.memory_percent() > 35:
                 return
         
         if load_if_exists:
@@ -519,12 +519,15 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         if ensembling or multiple_swag_realizations:
             if probabilistic:
                 # compute crps
-                prediction_ds = prediction_ds
-                dims = list(prediction_ds.dims).copy()
-                dims.remove('member')
-                dims.remove('lead_time')
-                crps_epoch = crps_ensemble(obs, prediction_ds.chunk({'member': -1}), dim=dims).compute()
-                crps_epoch.to_netcdf(crps_filename)
+                if load_metrics and os.path.isfile(crps_filename):
+                    crps_epoch = xr.open_dataset(crps_filename)
+                else:
+                    prediction_ds = prediction_ds
+                    dims = list(prediction_ds.dims).copy()
+                    dims.remove('member')
+                    dims.remove('lead_time')
+                    crps_epoch = crps_ensemble(obs, prediction_ds.chunk({'member': -1}), dim=dims).compute()
+                    crps_epoch.to_netcdf(crps_filename)
                 #skill_score = crpss(obs, prediction_ds, dims=list(prediction_ds.dims))
                 crps_results.append(list(zip(crps_epoch.z.values, crps_epoch.t.values)))
                 print('\nCRPS:')
