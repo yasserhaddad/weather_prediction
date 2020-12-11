@@ -46,6 +46,42 @@ warnings.filterwarnings("ignore")
 def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, 
                         metrics_path, figures_path, description, rmse_spherical=None, general_skills=True, benchmark_simple=True,
                         skillmaps=True):
+    """Generates different plots for evaluation. 
+    - Regular benchmark plots : RMSE
+    - General skills plots : relRMSE, relBias, rSD, R2
+    - Skillmaps : relRMSE, relBias, rSD, R2
+
+    Parameters
+    ----------
+    prediction_ds : xarray Dataset
+        Predictions dataset to be evaluated
+    reference_rmses : xarray Dataset
+        Reference RMSE to compare our results to
+    obs : xarray Dataset
+        Observations to compare our results to
+    resolution : float
+        Resolution of the data
+    lead_time : int
+        Prediction interval (in hours) 
+    max_lead_time : int
+        Maximum lead time (in case of iterative predictions) in hours
+    len_sqce : int
+        Length of the input and output (predicted) sequences
+    metrics_path : str
+        Path to the folder containing the metrics, such as RMSE
+    figures_path : str
+        Path to the folder in which to store the figures
+    description : str
+        Model description followed by experiment description
+    rmse_spherical : xarray Dataset, optional
+        RMSE of the predictions dataset, by default None
+    general_skills : bool, optional
+        Whether to plot the skills plots, by default True
+    benchmark_simple : bool, optional
+        Whether to plot the RMSE comparison plot, by default True
+    skillmaps : bool, optional
+        Whether to plot the skillmaps, by default True
+    """
     start_time = len_sqce * lead_time - 6
     end_time = (6-lead_time) if (6-lead_time) > 0 else None
 
@@ -76,6 +112,23 @@ def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_ti
 
 
 def hovmoller_diagram(prediction_ds, obs, lead_idx, resolution, figures_path, description):
+    """Plots the hovmoller diagram for a given prediction dataset and observations.
+
+    Parameters
+    ----------
+    prediction_ds : xarray Dataset
+        Predictions dataset to be evaluated
+    obs : xarray Dataset
+        Observations to compare our results to
+    lead_idx : int
+        Lead time index
+    resolution : float
+        Resolution of the data
+    figures_path : str
+        Path to the folder in which to store the figures
+    description : str
+        Model description followed by experiment description
+    """
     monthly_mean = prediction_ds.groupby('time.month').mean().compute()
     monthly_mean_obs = obs.groupby('time.month').mean().compute()
 
@@ -158,6 +211,21 @@ def crpss(obs, forecast, dim, gaussian=True, **metric_kwargs):
 
 
 def check_interval(prediction_ds, observations):
+    """Computes the presence of the observations within the predictions ensemble.
+
+    Parameters
+    ----------
+    prediction_ds : xarray Dataset
+        Predictions dataset with the first coordinate indicating the ensemble member
+    observations : xarray Dataset
+        Observations dataset to evaluate the predictions on
+
+    Returns
+    -------
+    (xarray DataArray, xarray DataArray, xarray Dataset)
+        Returns the percentage of observations in the predictions ensemble for both the Z and T variables
+        and the intermediate dataset used to compute the percentage
+    """
     min_pred = prediction_ds.min(axis=0)
     max_pred = prediction_ds.max(axis=0)
     
@@ -175,6 +243,52 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                                   nb_realizations=1, aggregate_realizations=False, plot_realizations=False, 
                                   last_epoch_only=True, load_if_exists=False, load_metrics=False, probabilistic=True, 
                                   full_plots=True, hovmoller=True, file_prefix=None):
+    """Generate the predictions for all types of models : single model, with or without SWAG,
+
+
+    Parameters
+    ----------
+    config_file : str
+        Name of the configuration file used for training
+    nb_models : int, optional
+        Number of models to evaluate, by default 5
+    ensembling : bool, optional
+        Whether to evaluate an ensemble, by default False
+    swag : bool, optional
+        Whether to evaluate SWAG model(s), by default False
+    scale_swag : float, optional
+        Scale of the SWAG sampling, by default 1.0
+    no_cov_mat : bool, optional
+        Whether to use the covariance matrix for SWAG sampling, by default False
+    max_models_swag : int, optional
+        Max number of models retained during SWAG training, by default 20
+    multiple_swag_realizations : bool, optional
+        Whether to evaluate multiple SWAG realizations of the same model, by default False
+    nb_realizations : int, optional
+        Number of realizations per model to evaluate, by default 1
+    aggregate_realizations : bool, optional
+        Whether to aggregate and take the median of the realizations for every model, by default False
+    plot_realizations : bool, optional
+        Plot the realizations against the median of the ensemble, by default False
+    last_epoch_only : bool, optional
+        Whether to only evaluate the last epoch of the trained model, by default True
+    load_if_exists : bool, optional
+        Whether to load already computed predictions, if they exist, by default False
+    load_metrics : bool, optional
+        Whether to load already computed metrics, if they exist, by default False
+    probabilistic : bool, optional
+        Whether to compute and plot the probabilistic metrics, by default True
+    full_plots : bool, optional
+        Whether to plot the RMSE and skill plots, as well as the skillmaps, by default True
+    hovmoller : bool, optional
+        Whether to plot the hovmoller diagram, by default True
+    file_prefix : [type], optional
+        File prefix, characterizing the experiment, by default None
+
+    Returns
+    -------
+        Returns the predictions, along with the observations, metrics results and plotting parameters
+    """
     print('Reading confing file and setting up folders...')
 
     pid = os.getpid()
@@ -279,6 +393,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         print(f"########Epoch {ep}########")
         models_predictions = []
 
+        # Define the description of the epoch's predictions
         description_epoch = description
         if file_prefix:
             description_epoch += f'_{file_prefix}'
@@ -291,6 +406,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         if swag:
             description_epoch += '_swag_scale{}'.format(str(scale_swag).replace('.', ''))
 
+        # Defining the final predictions filename
         pred_filename = pred_save_path +  description_epoch
 
         if ensembling or multiple_swag_realizations:
@@ -300,7 +416,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             if aggregate_realizations:
                 pred_median_filename = pred_filename + "_aggregate_median.nc"
                 pred_mean_filename = pred_filename + "_aggregate_mean.nc"
-            
+
+        # Defining the final RMSE results filename 
         rmse_filename = datadir + 'metrics/rmse_' + description_epoch + '.nc'
         if ensembling or multiple_swag_realizations:
             rmse_median_filename = rmse_filename[:-3] + '_median.nc'
@@ -310,9 +427,13 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 rmse_median_filename = rmse_filename[:-3] + '_aggregate_median.nc'
                 rmse_mean_filename = rmse_filename[:-3] + '_aggregate_mean.nc'
         
+        # If computing multiple swaf realizations, define the RMSE results filename for
+        # each realization
         if multiple_swag_realizations:
             rmse_realizations_filename = []
         
+        # If computing probabilistic metrics, define the filenames for CRPS and presence in
+        # interval results
         if probabilistic:
             crps_filename = datadir + 'metrics/crps_' + description_epoch + '.nc'
             interval_filename = datadir + 'metrics/interval_' + description_epoch + '.nc'
@@ -335,6 +456,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         for i in range(nb_models):
             print("\nModel", i+1)
 
+            # Defining the description for each model
             description_model_epoch = description
             if file_prefix:
                 description_model_epoch += f'_{file_prefix}'
@@ -351,6 +473,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 pred_model_filename = pred_model_filename[:-3] + \
                                         '_scale{}.nc'.format(str(scale_swag).replace('.', ''))
             
+            # Load training data for each ensemble member 
             if ensembling:
                     model_path = '../data/healpix/models/'
                     years_file = description_model_epoch.replace("_epoch{}".format(ep), "") + ".json"
@@ -367,6 +490,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                                                             years=train_years, nodes=nodes, nb_timesteps=nb_timesteps,
                                                             mean=train_mean_, std=train_std_)  
 
+            # If aggregating the realizations per model, create array that will store the predictions
+            # of individual realizations
             if aggregate_realizations:
                 realizations_predictions = []
 
@@ -376,12 +501,14 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 if multiple_swag_realizations and nb_realizations > 1:
                     print("\nRealization", j+1)
                 
+                # Stop creating predictions if the process is taking too much memory
                 if ensembling or multiple_swag_realizations:
                     print("Current memory use :", process.memory_percent())
                     if process.memory_percent() > 35:
                         return
                 
-                
+                # If computing multiple realizations per SWAG model, define the filenames for the predictions
+                # and metrics of individual realization
                 if multiple_swag_realizations:
                     pred_model_filename = pred_model_filename[:-3].replace(f'_realization{j}', '') + '_realization{}.nc'.format(j+1)
                     rmse_realization_filename = datadir + 'metrics/rmse_' + description_model_epoch + '_realization{}.nc'.format(j+1)
@@ -390,7 +517,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 if not os.path.isfile(model_name):
                     print(model_name)
                     continue
-
+                
+                # If loading exisiting predictions and file exists, load the predictions and skip this realization
                 if load_if_exists and os.path.isfile(pred_model_filename):
                     print("\tLoading existing predictions")
                     prediction_ds = xr.open_dataset(pred_model_filename).chunk('auto')
@@ -433,6 +561,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                     
                 model_epoch, device = init_device(model_epoch, gpu=gpu)
                 
+                # if using SWAG model, sample weights and perform a batch norm statistics update
+                # by passing once through the training data
                 if swag:
                     with torch.no_grad():
                         model_epoch.sample(scale_swag, cov=(not no_cov_mat))
@@ -490,7 +620,8 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
 
                 del prediction_ds
                 del realizations_predictions
-            
+
+        # Don't proceed with the metrics evaluation if the process is taking too much memory 
         if ensembling or multiple_swag_realizations:
             print("Current memory use :", process.memory_percent())
             if process.memory_percent() > 35:
@@ -553,6 +684,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
 
             models_predictions = [pred.assign_coords({'lat': out_lat, 'lon': out_lon}) for pred in models_predictions]
 
+            # compute or load median of predictions
             if load_metrics and os.path.isfile(pred_median_filename):
                 prediction_median_ds = xr.open_dataset(pred_median_filename).chunk(models_predictions[0].chunks)
             else:
@@ -567,6 +699,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 t_median_end = time.time()
                 print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
 
+            # compute or load mean of predictions
             if load_metrics and os.path.isfile(pred_mean_filename):
                 prediction_mean_ds = xr.open_dataset(pred_mean_filename).chunk(models_predictions[0].chunks)
             else:
@@ -584,6 +717,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             # compute RMSE
             reference_rmses = rmses_weyn.rename({'z500':'z', 't850':'t'}).sel(lead_time=common_lead_time)
             
+            # compute or load RMSE for median of predictions
             if load_metrics and os.path.isfile(rmse_median_filename):
                 rmse_median = xr.open_dataset(rmse_median_filename)
             else:
@@ -594,6 +728,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 t_median_end = time.time()
                 print("RMSE median : {t:2f}".format(t=t_median_end-t_median_start))
             
+            # compute or load RMSE for mean of predictions
             if load_metrics and os.path.isfile(rmse_mean_filename):
                 rmse_mean = xr.open_dataset(rmse_mean_filename)
             else:
@@ -604,12 +739,12 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 t_mean_end = time.time()
                 print("RMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
 
-            # plot RMSE
+            # RMSE at first lead time for median of predictions
             print('\nRMSE median')
             print('\tZ500 - 0:', rmse_median.z.values[0])
             print('\tT850 - 0:', rmse_median.t.values[0])
 
-            # plot RMSE
+            # RMSE at first lead time for mean of predictions
             print('RMSE mean')
             print('\tZ500 - 0:', rmse_mean.z.values[0])
             print('\tT850 - 0:', rmse_mean.t.values[0])
