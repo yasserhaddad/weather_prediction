@@ -599,11 +599,8 @@ def plot_general_skills(rmse_map, corr_map, rbias_map, rsd_map, model_descriptio
     
     plt.show()
 
-def plot_intervalmap(intervals, model_description, lead_times, resolution, output_dir):
+def plot_intervalmap(intervals, model_description, label, lead_times, resolution, output_dir, min_max=[0,1],  save=True):
     for i, lead in enumerate(lead_times):
-        interval_min = 0
-        interval_max = 1
-
         interval_equi = hp_to_equiangular(intervals.isel(lead_time=i), resolution)
         proj = ccrs.PlateCarree()
         f, axs = plt.subplots(1, 2, figsize=(15,15), subplot_kw=dict(projection=proj))
@@ -615,14 +612,42 @@ def plot_intervalmap(intervals, model_description, lead_times, resolution, outpu
         f.suptitle('Skillmaps between forecast and observation, lead time: {}h'.format(lead), 
                    fontsize=26, y=0.7, x=0.45)
 
-        plot_signal(f, sample=interval_equi, var='z', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[0], 
+        plot_signal(f, sample=interval_equi, var='z', vmin=min_max[0], vmax=min_max[1], proj=proj, ax=axs[0], 
+                    cmap='RdBu_r', colorbar=False, cbar_label='', extend='max')
+        plot_signal(f, sample=interval_equi, var='t', vmin=min_max[0], vmax=min_max[1], proj=proj, ax=axs[1], 
+                    cmap='RdBu_r', colorbar=True, cbar_label=label, extend='max', cbar_shrink=0.3)
+
+        f.tight_layout(pad=-2)
+        if save:
+            filename = model_description + '_' + str(i) + '_interval_maps.png'
+            plt.savefig(output_dir + filename, bbox_inches='tight')
+
+        plt.show()
+
+def plot_difference(diff, model_description, lead_times, resolution, output_dir):
+    for i, lead in enumerate(lead_times):
+        interval_min = 0
+        interval_max = 1
+
+        diff_equi = hp_to_equiangular(diff.isel(lead_time=i), resolution)
+        proj = ccrs.PlateCarree()
+        f, axs = plt.subplots(1, 2, figsize=(15,15), subplot_kw=dict(projection=proj))
+
+        cols = ['Z500', 'T850']
+        for ax, col in zip(axs, cols):
+            ax.set_title(col, fontsize=24, y=1.08)
+
+        f.suptitle('Skillmap of the difference between two predictions, lead time: {}h'.format(lead), 
+                   fontsize=26, y=0.7, x=0.45)
+
+        plot_signal(f, sample=diff_equi, var='z', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[0], 
                     cmap='Reds', colorbar=False, cbar_label='', extend='max')
-        plot_signal(f, sample=interval_equi, var='t', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[1], 
+        plot_signal(f, sample=diff_equi, var='t', vmin=interval_min, vmax=interval_max, proj=proj, ax=axs[1], 
                     cmap='Reds', colorbar=True, cbar_label='In Interval', extend='max', cbar_shrink=0.3)
 
         f.tight_layout(pad=-2)
         filename = model_description + '_' + str(i) + '_interval_maps.png'
-        plt.savefig(output_dir + filename, bbox_inches='tight')
+        # plt.savefig(output_dir + filename, bbox_inches='tight')
 
         plt.show()
 
