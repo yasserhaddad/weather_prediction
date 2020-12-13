@@ -624,6 +624,7 @@ def plot_intervalmap(intervals, model_description, label, lead_times, resolution
 
         plt.show()
 
+
 def plot_difference(diff, model_description, lead_times, resolution, output_dir):
     for i, lead in enumerate(lead_times):
         interval_min = 0
