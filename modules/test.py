@@ -542,11 +542,11 @@ def compute_rmse_equiangular(da_fc, da_true):
     """
     error = da_fc - da_true
     
-    resolution = pred.lon.values[1] - pred.lon.values[0]
+    resolution = da_fc.lon.values[1] - da_fc.lon.values[0]
     delta_lon = np.deg2rad(resolution)
     n_samples = len(da_fc.time)
     
-    weights_lat = np.cos(np.deg2rad(pred.lat - resolution/2 + 90)) - np.cos(np.deg2rad(pred.lat + resolution/2 + 90))
+    weights_lat = np.cos(np.deg2rad(da_fc.lat - resolution/2 + 90)) - np.cos(np.deg2rad(da_fc.lat + resolution/2 + 90))
     rmse = np.sqrt(((error)**2 * weights_lat * delta_lon /(4*np.pi)).mean('time').sum())
     return rmse
 
