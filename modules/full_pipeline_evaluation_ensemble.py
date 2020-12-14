@@ -680,7 +680,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 
                 lead_time = 6
                 lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
-                plot_intervalmap(interval, description_epoch + '_median', lead_times, resolution, figures_path)
+                plot_intervalmap(interval, description_epoch + '_median', 'In Interval', lead_times, resolution, figures_path)
 
             models_predictions = [pred.assign_coords({'lat': out_lat, 'lon': out_lon}) for pred in models_predictions]
 
