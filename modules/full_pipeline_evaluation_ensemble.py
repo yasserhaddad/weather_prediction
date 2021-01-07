@@ -4,6 +4,7 @@ import numpy as np
 import time
 import os
 import json
+import zarr
 import psutil
 import healpy as hp
 import random

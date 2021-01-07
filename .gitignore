@@ -151,6 +151,7 @@ cython_debug/
 notebooks/deep_ensembles/
 notebooks/swag/
 notebooks/swag_test/
+notebooks/zarr/
 notebooks/test.ipynb
 
 modules/swag/models/
