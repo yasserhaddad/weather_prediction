@@ -699,6 +699,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             if load_metrics and os.path.isfile(pred_median_filename):
                 prediction_median_ds = xr.open_dataset(pred_median_filename).chunk(models_predictions[0].chunks)
             else:
+                print("Computing median predictions")
                 t_median_start = time.time()
                 # median over values of ensemble
                 predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
@@ -708,7 +709,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 # save final median predictions
                 prediction_median_ds.to_netcdf(pred_median_filename)
                 t_median_end = time.time()
-                print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
+                print("\tMedian predictions : {t:2f}".format(t=t_median_end-t_median_start))
 
             # compute or load mean of predictions
             if load_metrics and os.path.isfile(pred_mean_filename):

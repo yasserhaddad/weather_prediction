@@ -39,9 +39,9 @@ faulthandler.enable()
 
 # Adapted : added model_nb argument to capture the model number of the ensemble, and the train split
 # as the training set will be split randomly
-def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensembling=True, train_split=0.8,
-                  swag=False, swa_start=3, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, save_only_last=True, 
-                  load_model=False, model_name_epochs=None, file_prefix=None):
+def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensembling=True, train_split=0.8, lr=None,
+                  sgd=False, swag=False, swa_start=3, swa_lr=0.001, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, 
+                  save_only_last=True, load_model=False, model_name_epochs=None, file_prefix=None):
     def update_w(w):
         """
         Update array of weights for the loss function
@@ -377,6 +377,9 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
     learning_rate = cfg['training_constants']['learning_rate']
     batch_size = cfg['training_constants']['batch_size']
 
+    if lr is not None:
+        learning_rate = lr
+
     # model parameters
     len_sqce = cfg['model_parameters']['len_sqce']
     delta_t = cfg['model_parameters']['delta_t']
@@ -523,8 +526,13 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
     weight_variations_ev = []
 
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(spherical_unet.parameters(), lr=learning_rate, eps=1e-7, weight_decay=0, amsgrad=False)
+    if sgd:
+        optimizer = optim.SGD(spherical_unet.parameters(), lr=learning_rate, momentum=0.9, weight_decay=0)
+    else:
+        optimizer = optim.Adam(spherical_unet.parameters(), lr=learning_rate, eps=1e-7, weight_decay=0, amsgrad=False)
 
+    if swag:
+        print(f"LR: {learning_rate}, SWA LR: {swa_lr}")
     # train model
     for ep in range(epochs):
 
@@ -542,7 +550,7 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
         # If we apply SWAG, use a scheduler that will modify the learning rate throughout the
         # training
         if swag:
-            lr = utils.schedule(ep, learning_rate, epochs, swag, swa_start, swa_lr=0.01)
+            lr = utils.schedule(ep, learning_rate, epochs, swag, swa_start, swa_lr=swa_lr)
             utils.adjust_learning_rate(optimizer, lr)
         
         # Check whether to train swag model or not at this epoch
@@ -615,12 +623,15 @@ def main_ensemble(config_file, model_nb, plot_weight_variations=False, ensemblin
     with open(results_filename, 'wb') as f:
         pickle.dump(results, f)
 
-    return train_loss_ev, val_loss_ev, train_loss_steps_ev, test_loss_steps_ev, weight_variations_ev
+    model = swag_model if swag else spherical_unet
+
+    return model, train_loss_ev, val_loss_ev, train_loss_steps_ev, test_loss_steps_ev, weight_variations_ev
 
 
-def train_ensemble(config_file, nb_models=3, plot_weight_variations=False, ensembling=True, train_split=0.8, 
-                   swag=False, swa_start=8, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, save_only_last=True, load_model=False, 
-                   model_name_epochs=None, file_prefix=None):
+def train_ensemble(config_file, nb_models=3, plot_weight_variations=False, ensembling=True, train_split=0.8, lr=None, 
+                   sgd=False, swag=False, swa_start=8, swa_lr=0.001, no_cov_mat=False, swag_freq=10, max_num_models_swag=20, 
+                   save_only_last=True, load_model=False, model_name_epochs=None, file_prefix=None):
+    models = []
     train_losses = []
     val_losses = []
     train_losses_steps = []
@@ -629,19 +640,37 @@ def train_ensemble(config_file, nb_models=3, plot_weight_variations=False, ensem
 
     for model_nb in range(nb_models):
         print(f"Model {model_nb+1}:\n")
-        train_loss_ev, val_loss_ev, train_loss_steps_ev, test_loss_steps_ev, weight_variations_ev = \
+        model, train_loss_ev, val_loss_ev, train_loss_steps_ev, test_loss_steps_ev, weight_variations_ev = \
         main_ensemble(config_file, model_nb=model_nb+1, plot_weight_variations=plot_weight_variations, 
-                      ensembling=ensembling, train_split=train_split, swag=swag, swa_start=swa_start,
-                      no_cov_mat=no_cov_mat, swag_freq=swag_freq, max_num_models_swag=max_num_models_swag, 
+                      ensembling=ensembling, train_split=train_split, lr=lr, sgd=sgd, swag=swag, swa_start=swa_start,
+                      swa_lr=swa_lr, no_cov_mat=no_cov_mat, swag_freq=swag_freq, max_num_models_swag=max_num_models_swag, 
                       save_only_last=save_only_last, load_model=load_model, model_name_epochs=model_name_epochs, 
                       file_prefix=file_prefix)
+        models.append(model)
         train_losses.append(train_loss_ev)
         val_losses.append(val_loss_ev)
         train_losses_steps.append(train_loss_steps_ev)
         test_losses_steps.append(test_loss_steps_ev)
         weight_variations.append(weight_variations_ev)
     
-    return train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations
+    return models, train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations
+
+def grid_search(args, train_split):
+    grid_search_swa_lr = args.grid_search_swa_lr if args.grid_search_swa_lr is not None else [0.0 for i in range(len(args.grid_search_lr))]
+
+    for lr, swa_lr in zip(args.grid_search_lr, grid_search_swa_lr):
+        print(f"LR: {lr}, SWA LR: {swa_lr}")
+        
+        file_prefix = f"{args.file_prefix}_{lr.replace('.', '')}"
+        if swa_lr != 0.0:
+            file_prefix += f"{swa_lr.replace('.', '')}"
+
+        models, train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations = \
+            train_ensemble(args.config_file, args.nb_models, args.plot_weight_variations, args.ensembling,
+                           train_split, float(lr), args.sgd, args.swag, args.swa_start, swa_lr, 
+                           args.no_cov_mat, args.swag_freq, args.max_num_models_swag, args.save_only_last, 
+                           args.load_model, args.model_name_epochs, file_prefix)
+             
 
 
 if __name__=="__main__":
@@ -673,6 +702,12 @@ if __name__=="__main__":
                         help='Max number of models to save for SWAG')
     parser.add_argument('--swag_freq', type=int, default=10,
                         help='SWAG collection frequency/epoch')
+    parser.add_argument('--sgd', action='store_true', 
+                        help='Use SGD as optimizer')
+    parser.add_argument('--grid_search_lr', nargs='+', default=None,
+                        help='List of learning rates to perform grid search on')
+    parser.add_argument('--grid_search_swa_lr', nargs='+', default=None,
+                        help='List of target learning rates for SWAG training to perform grid search on')
 
     args = parser.parse_args()
 
@@ -681,9 +716,13 @@ if __name__=="__main__":
     else:
         train_split = args.train_split
     
-    train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations = \
-            train_ensemble(args.config_file, args.nb_models, args.plot_weight_variations, args.ensembling,
-                           train_split, args.swag, args.swa_start, args.no_cov_mat, args.swag_freq,
-                           args.max_num_models_swag, args.save_only_last, args.load_model, args.model_name_epochs, 
-                           args.file_prefix)
+    if args.grid_search_lr is None and args.grid_search_swa_lr is None:
+        models, train_losses, val_losses, train_losses_steps, test_losses_steps, weight_variations = \
+                train_ensemble(args.config_file, args.nb_models, args.plot_weight_variations, args.ensembling,
+                            train_split, args.grid_search_lr, args.sgd, args.swag, args.swa_start, 0.001, args.no_cov_mat, 
+                            args.swag_freq, args.max_num_models_swag, args.save_only_last, args.load_model, 
+                            args.model_name_epochs, args.file_prefix)
+    else:
+        grid_search(args, train_split)        
+
     

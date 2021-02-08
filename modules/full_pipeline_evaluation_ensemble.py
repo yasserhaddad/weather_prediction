@@ -1,3 +1,6 @@
+import sys
+sys.path.append('/'.join(sys.path[0].split('/')[:-1]))
+
 import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +12,7 @@ import psutil
 import healpy as hp
 import random
 import pickle
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors
@@ -46,7 +50,7 @@ warnings.filterwarnings("ignore")
 
 def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, 
                         metrics_path, figures_path, description, rmse_spherical=None, general_skills=True, benchmark_simple=True,
-                        skillmaps=True):
+                        skillmaps=True, no_plot=False):
     """Generates different plots for evaluation. 
     - Regular benchmark plots : RMSE
     - General skills plots : relRMSE, relBias, rSD, R2
@@ -101,15 +105,15 @@ def generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_ti
 
     if benchmark_simple:
         plot_benchmark_simple(rmse_spherical, reference_rmses, description, lead_times, 
-                input_dir=metrics_path, output_dir=figures_path, title=False)
+                input_dir=metrics_path, output_dir=figures_path, title=False, no_plot=no_plot)
     
     if general_skills:
         plot_general_skills(rmse_map_norm, corr_map, rbias_map, rsd_map, description, lead_times, 
-                        output_dir=figures_path, title=False)
+                        output_dir=figures_path, title=False, no_plot=no_plot)
 
     if skillmaps:
         plot_skillmaps(rmse_map_norm, rsd_map, rbias_map, corr_map, description, lead_times, resolution, 
-                    output_dir=figures_path)
+                    output_dir=figures_path, no_plot=no_plot)
 
 
 def hovmoller_diagram(prediction_ds, obs, lead_idx, resolution, figures_path, description):
@@ -243,7 +247,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                                   no_cov_mat=False, max_models_swag=20, multiple_swag_realizations=False, 
                                   nb_realizations=1, aggregate_realizations=False, plot_realizations=False, 
                                   last_epoch_only=True, load_if_exists=False, load_metrics=False, probabilistic=True, 
-                                  full_plots=True, hovmoller=True, file_prefix=None):
+                                  full_plots=True, hovmoller=True, file_prefix=None, from_terminal=False):
     """Generate the predictions for all types of models : single model, with or without SWAG,
 
 
@@ -338,7 +342,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     model_filename = model_save_path + description + ".h5"
 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"]="2"
+    os.environ["CUDA_VISIBLE_DEVICES"]="4"
     gpu = [0]
     num_workers = 10
     pin_memory = True
@@ -485,7 +489,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                     
                     train_years = years['train_years']
                     val_years = years['val_years']
-                    ds_train, _, _ = load_data_split(input_dir, train_years, val_years, test_years, chunk_size, random_split=ensembling)
+                    ds_train, _, _ = load_data_split(input_dir, train_years, val_years, test_years, chunk_size, random_split=(ensembling and not swag))
                     training_ds = WeatherBenchDatasetXarrayHealpixTempMultiple(ds=ds_train, out_features=out_features, delta_t=delta_t,
                                                             len_sqce_input=len_sqce, len_sqce_output=num_steps_ahead, max_lead_time=max_lead_time,
                                                             years=train_years, nodes=nodes, nb_timesteps=nb_timesteps,
@@ -666,7 +670,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 print('\tZ500 : {:.3f}'.format(crps_results[-1][0][0]))
                 print('\tT850 : {:.3f}'.format(crps_results[-1][0][1]))
 
-                plot_crps(crps_epoch, lead_time=6, max_lead_time=max_lead_time)
+                plot_crps(crps_epoch, lead_time=6, max_lead_time=max_lead_time, no_plot=from_terminal, figures_path=figures_path)
 
                 # Compute percentage of observations in ensemble interval
                 interval_z, interval_t, interval = check_interval(prediction_ds, obs)
@@ -674,14 +678,15 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 print('\tZ500 : {:.3%}'.format(interval_z[0]))
                 print('\tT850 : {:.3%}'.format(interval_t[0]))
 
-                plot_interval(interval_z, interval_t, lead_time=6, max_lead_time=max_lead_time)
+                plot_interval(interval_z, interval_t, lead_time=6, max_lead_time=max_lead_time, no_plot=from_terminal, figures_path=figures_path)
                 
                 interval = interval.drop('lat').drop('lon')
                 interval = interval.astype('uint8').mean(['time']).compute()
                 
                 lead_time = 6
                 lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
-                plot_intervalmap(interval, description_epoch + '_median', 'In Interval', lead_times, resolution, figures_path)
+                plot_intervalmap(interval, description_epoch + '_median', 'In Interval', lead_times, resolution, figures_path, 
+                                 no_plot=from_terminal, figures_path=figures_path)
 
             models_predictions = [pred.assign_coords({'lat': out_lat, 'lon': out_lon}) for pred in models_predictions]
 
@@ -689,6 +694,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             if load_metrics and os.path.isfile(pred_median_filename):
                 prediction_median_ds = xr.open_dataset(pred_median_filename).chunk(models_predictions[0].chunks)
             else:
+                print("Computing median predictions")
                 t_median_start = time.time()
                 # median over values of ensemble
                 predictions_median = [prediction_ds['z'].median(axis=0), prediction_ds['t'].median(axis=0)]
@@ -698,12 +704,13 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 # save final median predictions
                 prediction_median_ds.to_netcdf(pred_median_filename)
                 t_median_end = time.time()
-                print("Median predictions : {t:2f}".format(t=t_median_end-t_median_start))
+                print("\tMedian predictions : {t:2f}".format(t=t_median_end-t_median_start))
 
             # compute or load mean of predictions
             if load_metrics and os.path.isfile(pred_mean_filename):
                 prediction_mean_ds = xr.open_dataset(pred_mean_filename).chunk(models_predictions[0].chunks)
             else:
+                print("Computing mean predictions")
                 t_mean_start = time.time()
                 # mean over values of ensemble
                 predictions_mean = [prediction_ds['z'].mean(axis=0), prediction_ds['t'].mean(axis=0)]
@@ -713,7 +720,7 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
                 # save final mean predictions
                 prediction_median_ds.to_netcdf(pred_mean_filename)
                 t_mean_end = time.time()
-                print("Mean predictions : {t:2f}".format(t=t_mean_end-t_mean_start))
+                print("\tMean predictions : {t:2f}".format(t=t_mean_end-t_mean_start))
 
             # compute RMSE
             reference_rmses = rmses_weyn.rename({'z500':'z', 't850':'t'}).sel(lead_time=common_lead_time)
@@ -722,23 +729,25 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             if load_metrics and os.path.isfile(rmse_median_filename):
                 rmse_median = xr.open_dataset(rmse_median_filename)
             else:
+                print("Computing RMSE of median predictions")
                 t_median_start = time.time()
                 ## RMSE for median of predictions
                 rmse_median = compute_rmse_healpix(prediction_median_ds, obs).load()
                 rmse_median.to_netcdf(rmse_median_filename)
                 t_median_end = time.time()
-                print("RMSE median : {t:2f}".format(t=t_median_end-t_median_start))
+                print("\tRMSE median : {t:2f}".format(t=t_median_end-t_median_start))
             
             # compute or load RMSE for mean of predictions
             if load_metrics and os.path.isfile(rmse_mean_filename):
                 rmse_mean = xr.open_dataset(rmse_mean_filename)
             else:
+                print("Computing RMSE of mean predictions")
                 t_mean_start = time.time()
                 ## RMSE for mean of predictions
                 rmse_mean = compute_rmse_healpix(prediction_mean_ds, obs).load()
                 rmse_mean.to_netcdf(rmse_mean_filename)
                 t_mean_end = time.time()
-                print("RMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
+                print("\tRMSE mean : {t:2f}".format(t=t_mean_end-t_mean_start))
 
             # RMSE at first lead time for median of predictions
             print('\nRMSE median')
@@ -764,12 +773,13 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
             if plot_realizations:
                 # Plot the realizations and their median
                 plot_rmses_realizations(rmse_median, rmses_realizations, lead_time=6, max_lead_time=max_lead_time, 
-                                        title=f'Realizations and median comparison for scale {str(scale_swag)}', rmse_mean=rmse_mean)
+                                        title=f'Realizations and median comparison for scale {str(scale_swag)}', rmse_mean=rmse_mean,
+                                        no_plot=from_terminal, figures_path=figures_path)
                 
                 lead_time = 6
                 generate_plots_eval(prediction_median_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
                                     figures_path, description_epoch + "_median", rmse_spherical=rmse_median, general_skills=True, 
-                                    benchmark_simple=False, skillmaps=False)
+                                    benchmark_simple=False, skillmaps=False, no_plot=from_terminal)
             if ensembling:
                 plot_rmses(rmse_median, reference_rmses, lead_time=6, max_lead_time=max_lead_time, 
                             title=f'RMSE of Median of Ensemble for {nb_models} models')   
@@ -806,13 +816,13 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
         if ensembling or multiple_swag_realizations:
             print("Median")
             generate_plots_eval(prediction_median_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
-                                figures_path, description_epoch + '_median')
+                                figures_path, description_epoch + '_median', no_plot=from_terminal)
             # print("Mean")
             # generate_plots_eval(prediction_mean_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
             #                     figures_path, description_epoch + '_mean')
         else:
             generate_plots_eval(prediction_ds, reference_rmses, obs, resolution, lead_time, max_lead_time, len_sqce, metrics_path, 
-                                figures_path, description_epoch)
+                                figures_path, description_epoch, no_plot=from_terminal)
     
     if hovmoller:
         lead_idx = len(lead_times) - 1
@@ -831,4 +841,48 @@ def generate_predictions_ensemble(config_file, nb_models=5, ensembling=False, sw
     else:
         return rmse, prediction_ds, obs, plot_params
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_file', type=str, default="config_residual_multiple_steps.json",
+                        help='Name of config file with all the training/testing parameters')
+    parser.add_argument('--nb_models', type=int, default=1,
+                        help='Number of models to perform predictions on')
+    parser.add_argument('--ensembling', action='store_true')
+    parser.add_argument('--swag', action='store_true', help='SWAG model')
+    parser.add_argument('--scale_swag', type=float, default=0.1,
+                        help='Scale of SWAG')
+    parser.add_argument('--no_cov_mat', action='store_true', help='No covariance matrix')
+    parser.add_argument('--max_models_swag', type=int, default=20,
+                        help='Max number of saved models during SWAG training')
+    parser.add_argument('--multiple_swag_realizations', action='store_true', help='Multiple SWAG realizations')
+    parser.add_argument('--nb_realizations', type=int, default=1,
+                        help='Number of realizations to sample from model')
+    parser.add_argument('--aggregate_realizations', action='store_true', help='Aggregate SWAG realizations if MultiSWAG')
+    parser.add_argument('--plot_realizations', action='store_true', help='Plot realizations')
+    parser.add_argument('--last_epoch_only', action='store_true', help='Only predict using last epoch of the trained model')
+    parser.add_argument('--load_if_exists', action='store_true', help='Load already computed predictions')
+    parser.add_argument('--load_metrics', action='store_true', help='Load already computed metrics')
+    parser.add_argument('--probabilistic', action='store_true', help='Compute probabilistic metrics')
+    parser.add_argument('--full_plots', action='store_true', help='Compute full plots')
+    parser.add_argument('--hovmoller', action='store_true', help='Compute hovmoller diagrams')
+    parser.add_argument('--file_prefix', type=str, default='', help='File prefix')
+    parser.add_argument('--from_terminal', action='store_true', help='Compute predictions and plots from terminal')
 
+    args = parser.parse_args()
+
+    retry = True
+    while retry:
+        try:
+            _, _, _, _, _, _, _, _ = \
+                            generate_predictions_ensemble(args.config_file, nb_models=args.nb_models, ensembling=args.ensembling, 
+                                                          swag=args.swag, scale_swag=args.scale_swag, no_cov_mat=args.no_cov_mat, 
+                                                          max_models_swag=args.max_models_swag, multiple_swag_realizations=args.multiple_swag_realizations, 
+                                                          nb_realizations=args.nb_realizations, aggregate_realizations=args.aggregate_realizations, 
+                                                          plot_realizations=args.plot_realizations, last_epoch_only=args.last_epoch_only, 
+                                                          load_if_exists=args.load_if_exists, load_metrics=args.load_metrics, probabilistic=args.probabilistic, 
+                                                          full_plots=args.full_plots, hovmoller=args.hovmoller, file_prefix=args.file_prefix, 
+                                                          from_terminal=args.from_terminal)
+            retry = False
+        except TypeError:
+            print("\n\nRestarting\n\n")
+            continue

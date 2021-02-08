@@ -52,7 +52,7 @@ def _compute_min_max(samples):
     maxs = [samples[i].max(dim=xr.ALL_DIMS).values for i in range(len(samples))]
     return min(mins), max(maxs)
 
-def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120, title=None):
+def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120, title=None, no_plot=False, figures_path=''):
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4), constrained_layout=True)
         
     lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
@@ -74,10 +74,15 @@ def plot_rmses(rmse, reference_rmse, lead_time, max_lead_time=120, title=None):
     if title:
         f.suptitle(title, fontsize=20, horizontalalignment='center')
 
-    plt.show()
+    if not no_plot:
+        plt.show()
+    else:
+        filename = title.lower().replace(" ", "_")
+        plt.savefig(figures_path + filename + ".png")
 
 
-def plot_rmses_realizations(rmse_median, rmse_realizations, lead_time, max_lead_time=120, title=None, rmse_mean=None):
+def plot_rmses_realizations(rmse_median, rmse_realizations, lead_time, max_lead_time=120, title=None, rmse_mean=None, 
+                            no_plot=False, figures_path=''):
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4), constrained_layout=True)
 
     lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
@@ -113,10 +118,14 @@ def plot_rmses_realizations(rmse_median, rmse_realizations, lead_time, max_lead_
     if title:
         plt.suptitle(title, fontsize=20, horizontalalignment='center')
 
-    plt.show()
+    if not no_plot:
+        plt.show()
+    else:
+        filename = title.lower().replace(" ", "_")
+        plt.savefig(figures_path + filename + ".png")
 
 
-def plot_crps(crps, lead_time, max_lead_time):
+def plot_crps(crps, lead_time, max_lead_time, no_plot=False, figures_path=''):
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
     
     lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
@@ -130,10 +139,14 @@ def plot_crps(crps, lead_time, max_lead_time):
     ax2.set_ylabel('CRPS')
     ax1.set_title('Z500')
     ax2.set_title('T850')
-    plt.show()
+    if not no_plot:
+        plt.show()
+    else:
+        filename = title.lower().replace(" ", "_")
+        plt.savefig(figures_path + filename + ".png")
 
 
-def plot_interval(interval_z, interval_t, lead_time, max_lead_time):
+def plot_interval(interval_z, interval_t, lead_time, max_lead_time, no_plot=False, figures_path=''):
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
     
     lead_times = np.arange(lead_time, max_lead_time + lead_time, lead_time)
@@ -147,7 +160,11 @@ def plot_interval(interval_z, interval_t, lead_time, max_lead_time):
     ax2.set_ylabel('Fraction of observations in ensemble interval')
     ax1.set_title('Z500')
     ax2.set_title('T850')
-    plt.show()
+    if not no_plot:
+        plt.show()
+    else:
+        filename = title.lower().replace(" ", "_")
+        plt.savefig(figures_path + filename + ".png")
 
 
 def plot_signal(f, sample, var, ax, vmin, vmax, proj, cmap, colorbar, cbar_label, cbar_shrink=0.7, 
@@ -292,7 +309,7 @@ def plot_benchmark(rmses_spherical, model_description, lead_times, input_dir, ou
     plt.show()
     
 def plot_benchmark_simple(rmses_spherical, reference_rmses, model_description, lead_times, input_dir, output_dir, \
-                          title=True, filename=None, names=[]):
+                          title=True, filename=None, names=[], no_plot=False):
     """
     Plot rmse of different models vs Weyn et al
 
@@ -354,7 +371,8 @@ def plot_benchmark_simple(rmses_spherical, reference_rmses, model_description, l
     plt.tight_layout()
     plt.savefig(output_dir + filename, bbox_inches='tight')
 
-    plt.show()
+    if not no_plot:
+        plt.show()
 
 
 def plot_benchmark_MAE(rmses_spherical, model_description, lead_times, input_dir, output_dir, title=True):
@@ -501,7 +519,7 @@ def plot_benchmark_ACC(rmses_spherical, model_description, lead_times, input_dir
     
 def plot_general_skills(rmse_map, corr_map, rbias_map, rsd_map, model_description, lead_times, 
                         output_dir,  relrmse_ylim=[0, 0.05], relbias_ylim=[-0.05, 0.05], 
-                        rsd_ylim=[0, 2], r2_ylim=[0, 1], title=True):
+                        rsd_ylim=[0, 2], r2_ylim=[0, 1], title=True, no_plot=False):
     
     n_ticks = len(lead_times)
     
@@ -597,9 +615,10 @@ def plot_general_skills(rmse_map, corr_map, rbias_map, rsd_map, model_descriptio
     filename = model_description + '_general_skills.png'
     plt.savefig(output_dir + filename, bbox_inches='tight')
     
-    plt.show()
+    if not no_plot:
+        plt.show()
 
-def plot_intervalmap(intervals, model_description, label, lead_times, resolution, output_dir, min_max=[0,1],  save=True):
+def plot_intervalmap(intervals, model_description, label, lead_times, resolution, output_dir, min_max=[0,1], save=True, no_plot=False):
     for i, lead in enumerate(lead_times):
         interval_equi = hp_to_equiangular(intervals.isel(lead_time=i), resolution)
         proj = ccrs.PlateCarree()
@@ -622,7 +641,8 @@ def plot_intervalmap(intervals, model_description, label, lead_times, resolution
             filename = model_description + '_' + str(i) + '_interval_maps.png'
             plt.savefig(output_dir + filename, bbox_inches='tight')
 
-        plt.show()
+        if not no_plot:
+            plt.show()
 
 
 def plot_difference(diff, model_description, lead_times, resolution, output_dir):
@@ -654,7 +674,7 @@ def plot_difference(diff, model_description, lead_times, resolution, output_dir)
 
 
 def plot_skillmaps(rmse_map, rsd_map, rbias_map, corr_map, model_description, lead_times, resolution, 
-                   output_dir):
+                   output_dir, no_plot=False):
     for i, lead in enumerate(lead_times):  
         
         rmse_min = 0
@@ -710,7 +730,8 @@ def plot_skillmaps(rmse_map, rsd_map, rbias_map, corr_map, model_description, le
         filename = model_description + '_' + str(i) + '_maps.png'
         plt.savefig(output_dir + filename, bbox_inches='tight')
 
-        plt.show()
+        if not no_plot:
+            plt.show()
        
 '''   
 def plot_general_skills(rmse, corr, rbias, rsd, model_description, lead_times, 
